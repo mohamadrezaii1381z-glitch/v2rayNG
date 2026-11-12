@@ -16,6 +16,7 @@ import com.v2ray.ang.contracts.IDialerService
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.dto.ConnectionTestResult
 import com.v2ray.ang.dto.OutboundTrafficStat
+import com.v2ray.ang.dto.TrafficTotals
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.BrowserDialerMode
 import com.v2ray.ang.extension.delay
@@ -56,6 +57,13 @@ object CoreServiceManager {
 
     @Volatile
     private var isReloading = false
+
+    /** HardVPN: monotonic traffic totals for the current session, see [trafficTotals]. */
+    private val trafficLock = Any()
+    private var totalProxyUp = 0L
+    private var totalProxyDown = 0L
+    private var totalDirectUp = 0L
+    private var totalDirectDown = 0L
 
     /** Tun descriptor the core was started with, null in the proxy only and root run modes. */
     private var currentVpnInterface: ParcelFileDescriptor? = null
@@ -178,6 +186,12 @@ object CoreServiceManager {
         }
 
         if (!isReload) {
+            // HardVPN: fresh session, so the UI can report real totals and a real duration.
+            resetTrafficTotals()
+            MmkvManager.encodeSettings(
+                AppConfig.CACHE_SESSION_STARTED_AT,
+                System.currentTimeMillis()
+            )
             MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_START_SUCCESS, "")
         }
         NotificationManager.startSpeedNotification()
@@ -214,6 +228,7 @@ object CoreServiceManager {
             browserDialer = null
         }
 
+        MmkvManager.encodeSettings(AppConfig.CACHE_SESSION_STARTED_AT, 0L)
         MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_STOP_SUCCESS, "")
         NotificationManager.cancelNotification()
 
@@ -307,8 +322,46 @@ object CoreServiceManager {
                 )
             )
         }
+        synchronized(trafficLock) {
+            result.forEach { stat ->
+                when {
+                    stat.tag == AppConfig.TAG_DIRECT -> when (stat.direction) {
+                        AppConfig.UPLINK -> totalDirectUp += stat.value
+                        AppConfig.DOWNLINK -> totalDirectDown += stat.value
+                    }
+
+                    stat.tag != AppConfig.TAG_BLOCKED -> when (stat.direction) {
+                        AppConfig.UPLINK -> totalProxyUp += stat.value
+                        AppConfig.DOWNLINK -> totalProxyDown += stat.value
+                    }
+                }
+            }
+        }
 //        LogUtil.d(AppConfig.TAG, "Queried outbound traffic stats: $result")
         return result
+    }
+
+    /**
+     * HardVPN: accumulated traffic of the current tunnelling session.
+     *
+     * The core counters are drained by [queryAllOutboundTrafficStats], which both the speed
+     * notification and the UI query for. Summing into monotonic totals here means either
+     * consumer can compute an exact rate and session total without touching the other.
+     */
+    fun trafficTotals(): TrafficTotals = synchronized(trafficLock) {
+        TrafficTotals(
+            proxyUp = totalProxyUp,
+            proxyDown = totalProxyDown,
+            directUp = totalDirectUp,
+            directDown = totalDirectDown,
+        )
+    }
+
+    private fun resetTrafficTotals() = synchronized(trafficLock) {
+        totalProxyUp = 0L
+        totalProxyDown = 0L
+        totalDirectUp = 0L
+        totalDirectDown = 0L
     }
 
     /**
@@ -520,6 +573,17 @@ object CoreServiceManager {
                 AppConfig.MSG_MEASURE_DELAY -> {
                     if (isOrderedBroadcast) resultCode = Activity.RESULT_OK
                     measureV2rayDelay(intent.getStringExtra("content").orEmpty())
+                }
+
+                AppConfig.MSG_QUERY_TRAFFIC -> {
+                    // HardVPN: reply with this session's totals, never with configuration data.
+                    if (!isRunning()) return
+                    val totals = trafficTotals()
+                    MessageHelper.sendMsg2UI(
+                        serviceControl.getService(),
+                        AppConfig.MSG_TRAFFIC_RESULT,
+                        "${totals.proxyUp},${totals.proxyDown}"
+                    )
                 }
             }
 

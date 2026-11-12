@@ -203,6 +203,17 @@ object AppConfig {
     const val MSG_SUB_UPDATE_START = 8
     const val MSG_SUB_UPDATE_CANCEL = 81
 
+    /**
+     * HardVPN: asks the running daemon for the accumulated proxy traffic of the current
+     * session. The daemon answers with [MSG_TRAFFIC_RESULT] carrying "uplink,downlink".
+     * It reuses the daemon's existing traffic counters, so no extra polling loop is added.
+     */
+    const val MSG_QUERY_TRAFFIC = 9
+    const val MSG_TRAFFIC_RESULT = 91
+
+    /** HardVPN: wall-clock time the current tunnel session started, 0 when stopped. */
+    const val CACHE_SESSION_STARTED_AT = "cache_session_started_at"
+
     /** Notification channel IDs and names. */
     // Use a new ID because Android does not let an app raise an existing channel's importance.
     const val RAY_NG_CHANNEL_ID = "CORE_M_CH_ID_V2"
