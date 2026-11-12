@@ -11,7 +11,7 @@ import com.v2ray.ang.extension.toast
 import com.v2ray.ang.extension.toastError
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.ui.base.BaseComponentActivity
-import com.v2ray.ang.ui.main.MainActivity
+import com.v2ray.ang.hardvpn.HardVpnActivity
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -51,7 +51,7 @@ class UrlSchemeActivity : BaseComponentActivity() {
                 }
             }
 
-            startActivity(Intent(this, MainActivity::class.java))
+            startActivity(Intent(this, HardVpnActivity::class.java))
             finish()
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Error processing URL scheme", e)

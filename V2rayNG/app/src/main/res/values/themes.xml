@@ -9,6 +9,18 @@
         <item name="android:windowBackground">@color/window_background_light</item>
     </style>
 
+    <!-- HardVPN: fixed dark-navy window so the HardVPN UI never flashes a light system background.
+         The activity also pins AppCompatDelegate to night mode; the Compose HardVpnTheme supplies
+         the in-app palette. -->
+    <color name="window_background_hardvpn">#FF040A18</color>
+
+    <style name="AppThemeHardVpn" parent="AppThemeBaseCommon">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/window_background_hardvpn</item>
+        <item name="android:statusBarColor">@color/window_background_hardvpn</item>
+        <item name="android:navigationBarColor">@color/window_background_hardvpn</item>
+    </style>
+
     <!-- API 27+ adds navigation bar icon appearance in the versioned base theme. -->
     <style name="AppThemeBase" parent="AppThemeBaseCommon" />
 

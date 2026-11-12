@@ -16,6 +16,7 @@ import com.v2ray.ang.contracts.IDialerService
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.dto.ConnectionTestResult
 import com.v2ray.ang.dto.OutboundTrafficStat
+import com.v2ray.ang.dto.TrafficSample
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.BrowserDialerMode
 import com.v2ray.ang.extension.delay
@@ -56,6 +57,14 @@ object CoreServiceManager {
 
     @Volatile
     private var isReloading = false
+
+    /** Wall-clock start of the running core, 0 while stopped. Published to the UI in traffic samples. */
+    @Volatile
+    private var coreStartedAtMillis = 0L
+
+    /** Start of the previous traffic sample window; guarded by [trafficSampleLock]. */
+    private var lastTrafficSampleAtMillis = 0L
+    private val trafficSampleLock = Any()
 
     /** Tun descriptor the core was started with, null in the proxy only and root run modes. */
     private var currentVpnInterface: ParcelFileDescriptor? = null
@@ -159,6 +168,11 @@ object CoreServiceManager {
             error("Core failed to start")
         }
 
+        // First successful start of this session; reloads keep the original session start.
+        if (coreStartedAtMillis == 0L) {
+            coreStartedAtMillis = System.currentTimeMillis()
+        }
+
         if (browserDialer != null) {
             browserDialer!!.stop()
             browserDialer = null
@@ -191,6 +205,8 @@ object CoreServiceManager {
      */
     fun stopCoreLoop(): Boolean {
         connectionTestScope.coroutineContext.cancelChildren()
+        coreStartedAtMillis = 0L
+        synchronized(trafficSampleLock) { lastTrafficSampleAtMillis = 0L }
         val service = getService() ?: return false
 
         networkMonitor?.unregister()
@@ -309,6 +325,49 @@ object CoreServiceManager {
         }
 //        LogUtil.d(AppConfig.TAG, "Queried outbound traffic stats: $result")
         return result
+    }
+
+    /**
+     * Reads one real traffic sample from the running core.
+     *
+     * Byte counts are deltas since the previous sample, because the core counters reset on every
+     * query. Used by the notification speed loop and, through [AppConfig.MSG_QUERY_TRAFFIC], by the
+     * UI. Must only run in the daemon process.
+     *
+     * @return the sample, or an empty sample when the core is not running.
+     */
+    fun queryTrafficSample(): TrafficSample {
+        synchronized(trafficSampleLock) {
+            if (!isRunning()) {
+                lastTrafficSampleAtMillis = 0L
+                return TrafficSample()
+            }
+            val now = System.currentTimeMillis()
+            val intervalMillis = if (lastTrafficSampleAtMillis == 0L) {
+                0L
+            } else {
+                (now - lastTrafficSampleAtMillis).coerceAtLeast(0L)
+            }
+            lastTrafficSampleAtMillis = now
+
+            var uplinkBytes = 0L
+            var downlinkBytes = 0L
+            queryAllOutboundTrafficStats().forEach { stat ->
+                // Blocked outbounds never reach the network, so they are not tunnel traffic.
+                if (stat.tag != AppConfig.TAG_BLOCKED) {
+                    when (stat.direction) {
+                        AppConfig.UPLINK -> uplinkBytes += stat.value
+                        AppConfig.DOWNLINK -> downlinkBytes += stat.value
+                    }
+                }
+            }
+            return TrafficSample(
+                uplinkBytes = uplinkBytes,
+                downlinkBytes = downlinkBytes,
+                intervalMillis = intervalMillis,
+                connectedAtMillis = coreStartedAtMillis,
+            )
+        }
     }
 
     /**
@@ -520,6 +579,16 @@ object CoreServiceManager {
                 AppConfig.MSG_MEASURE_DELAY -> {
                     if (isOrderedBroadcast) resultCode = Activity.RESULT_OK
                     measureV2rayDelay(intent.getStringExtra("content").orEmpty())
+                }
+
+                AppConfig.MSG_QUERY_TRAFFIC -> {
+                    // The daemon is the only owner of the native counters; reply with their values.
+                    MessageHelper.sendMsg2UI(
+                        serviceControl.getService(),
+                        AppConfig.MSG_QUERY_TRAFFIC_RESULT,
+                        queryTrafficSample(),
+                        intent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID),
+                    )
                 }
             }
 
