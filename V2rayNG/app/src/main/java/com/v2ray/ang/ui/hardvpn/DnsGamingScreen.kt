@@ -53,11 +53,13 @@ fun DnsGamingScreen(
     onApplyProfile: (DnsProfile) -> Unit,
     onSaveProfile: (DnsProfile) -> Unit,
     onDeleteProfile: (String) -> Unit,
+    onDeactivateDns: () -> Unit,
     onDestination: (HardVpnDestination) -> Unit,
 ) {
     var editingProfile by remember { mutableStateOf<DnsProfile?>(null) }
     var creatingProfile by rememberSaveable { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<DnsProfile?>(null) }
+    var customName by rememberSaveable { mutableStateOf("") }
     var customPrimary by rememberSaveable { mutableStateOf("") }
     var customSecondary by rememberSaveable { mutableStateOf("") }
 
@@ -111,36 +113,10 @@ fun DnsGamingScreen(
             ) {
                 Spacer(Modifier.height(2.dp))
 
-                CurrentDnsCard(dns = state.dns)
+                CurrentDnsCard(dns = state.dns, onDeactivate = onDeactivateDns)
 
-                SectionLabel(text = "Presets")
-
-                DnsPresetCard(
-                    title = "Electro DNS",
-                    subtitle = "Preset address is not verified in this build",
-                    iconBackground = Brush.linearGradient(
-                        listOf(Color(0xFF3E9CFF), Color(0xFF164A9F))
-                    ),
-                    applied = false,
-                    enabled = false,
-                    actionLabel = "Unavailable",
-                    onAction = {},
-                )
-
-                DnsPresetCard(
-                    title = "Cloudflare DNS",
-                    subtitle = "1.1.1.1 / 1.0.0.1",
-                    iconBackground = Brush.linearGradient(
-                        listOf(Color(0xFFF48120), Color(0xFFE83A8A))
-                    ),
-                    applied = state.dns.remoteDns == "1.1.1.1,1.0.0.1" ||
-                            state.dns.remoteDns == "1.1.1.1",
-                    enabled = true,
-                    actionLabel = "Apply",
-                    onAction = {
-                        onApplyPreset("Cloudflare DNS", "1.1.1.1", "1.0.0.1")
-                    },
-                )
+                // No DNS provider is pre-inserted or silently enabled: the user enters
+                // resolver addresses manually below.
 
                 HardVpnCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -179,6 +155,12 @@ fun DnsGamingScreen(
                             }
                         }
                         HardVpnTextField(
+                            value = customName,
+                            onValueChange = { customName = it },
+                            placeholder = "Profile name (for saving)",
+                            contentDescription = "Custom DNS profile name",
+                        )
+                        HardVpnTextField(
                             value = customPrimary,
                             onValueChange = { customPrimary = it },
                             placeholder = "Primary DNS (e.g. 8.8.8.8)",
@@ -193,7 +175,7 @@ fun DnsGamingScreen(
                             contentDescription = "Custom secondary DNS",
                         )
                         PrimaryButton(
-                            text = "Apply custom DNS",
+                            text = "Activate DNS",
                             onClick = {
                                 onApplyPreset(
                                     "Custom DNS",
@@ -203,6 +185,22 @@ fun DnsGamingScreen(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = customPrimary.isNotBlank(),
+                        )
+                        PrimaryButton(
+                            text = "Save profile",
+                            onClick = {
+                                onSaveProfile(
+                                    DnsProfile(
+                                        id = UUID.randomUUID().toString(),
+                                        name = customName.trim(),
+                                        primary = customPrimary.trim(),
+                                        secondary = customSecondary.trim(),
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = customName.isNotBlank() && customPrimary.isNotBlank(),
+                            outlined = true,
                         )
                         Text(
                             text = "Only plain IPv4 or IPv6 resolver addresses are accepted. The engine rejects anything else and the screen reports that honestly.",
@@ -255,7 +253,7 @@ fun DnsGamingScreen(
 }
 
 @Composable
-private fun CurrentDnsCard(dns: DnsUiState) {
+private fun CurrentDnsCard(dns: DnsUiState, onDeactivate: () -> Unit) {
     val activeName = dns.activeProfile?.name
     HardVpnCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 13.dp)) {
@@ -307,6 +305,15 @@ private fun CurrentDnsCard(dns: DnsUiState) {
                     color = Muted.copy(alpha = 0.85f),
                     fontSize = 10.sp,
                     lineHeight = 14.sp,
+                )
+            }
+            if (dns.remoteDns.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                PrimaryButton(
+                    text = "Disconnect DNS",
+                    onClick = onDeactivate,
+                    modifier = Modifier.fillMaxWidth(),
+                    outlined = true,
                 )
             }
         }

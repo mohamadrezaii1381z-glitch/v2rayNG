@@ -86,7 +86,7 @@ fun formatDuration(totalSeconds: Long): String {
 }
 
 fun pingLabel(pingMs: Long?): String =
-    pingMs?.takeIf { it > 0L }?.let { "$it ms" } ?: "-- ms"
+    pingMs?.takeIf { it > 0L }?.let { "$it ms" } ?: "--"
 
 fun pingColor(pingMs: Long?): Color = when {
     pingMs == null || pingMs <= 0L -> Muted

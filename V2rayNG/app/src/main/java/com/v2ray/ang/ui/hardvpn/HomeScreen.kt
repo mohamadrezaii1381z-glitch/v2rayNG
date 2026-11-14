@@ -49,7 +49,6 @@ fun HomeScreen(
     onToggleConnection: () -> Unit,
     onPremiumClick: () -> Unit,
     onServerCardClick: () -> Unit,
-    onBoostToggle: () -> Unit,
     onSponsorsClick: () -> Unit,
     onSampleTraffic: () -> Unit,
     onDestination: (HardVpnDestination) -> Unit,
@@ -168,13 +167,6 @@ fun HomeScreen(
                             autoSelect = state.autoSelect,
                             compact = compact,
                             onClick = onServerCardClick,
-                        )
-
-                        BoostSecurityCard(
-                            compact = compact,
-                            enabled = state.boostSecurityEnabled,
-                            connected = state.isConnected,
-                            onToggle = onBoostToggle,
                         )
 
                         SponsorsCard(onOpen = onSponsorsClick)

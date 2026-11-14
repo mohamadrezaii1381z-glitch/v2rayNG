@@ -37,6 +37,7 @@ data class HardVpnUiState(
     val home: DomainSnapshot = DomainSnapshot(),
     val explore: DomainSnapshot = DomainSnapshot(),
     val manualServers: List<SafeServer> = emptyList(),
+    val manualSources: List<SourceUi> = emptyList(),
     val selectedHome: String? = null,
     val selectedExplore: String? = null,
     val selectedManual: String? = null,
@@ -47,7 +48,6 @@ data class HardVpnUiState(
     val activeServerLocation: String = "",
     val activeServerPing: Long? = null,
     val activeSourceLabel: String = "",
-    val boostSecurityEnabled: Boolean = false,
     val homeLoading: Boolean = false,
     val exploreLoading: Boolean = false,
     val manualLoading: Boolean = false,
@@ -125,6 +125,7 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun onEngineRunning() {
+        HardVpnConnectionCoordinator.markActive(repository.activeDomain().toOwner())
         val startedAt = engine.sessionStartedAtMillis()
         _uiState.value = _uiState.value.copy(
             phase = ConnectionPhase.Connected,
@@ -142,6 +143,7 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     private fun onEngineStarted() {
         connectTimeoutJob?.cancel()
         connectGuard.set(false)
+        HardVpnConnectionCoordinator.markActive(pendingDomain.toOwner())
         val startedAt = engine.sessionStartedAtMillis()
         _uiState.value = _uiState.value.copy(
             phase = ConnectionPhase.Connected,
@@ -155,6 +157,7 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     private fun onEngineStopped() {
         connectTimeoutJob?.cancel()
         connectGuard.set(false)
+        HardVpnConnectionCoordinator.markIdle()
         lastTrafficUplink = 0L
         lastTrafficDownlink = 0L
         lastTrafficSampleAt = 0L
@@ -204,9 +207,25 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
      * Returns false when there is nothing to connect to; the UI then shows the reason.
      */
     suspend fun prepareConnection(domain: ConfigDomain): Boolean {
-        if (connectGuard.get() || _uiState.value.isBusy || _uiState.value.isConnected) return false
+        if (connectGuard.get() || _uiState.value.isBusy) return false
+        if (_uiState.value.isConnected && _uiState.value.activeDomain == domain) return false
         connectGuard.set(true)
         pendingDomain = domain
+        connectionOperation = HardVpnConnectionCoordinator.nextOperation()
+        val operation = connectionOperation
+        HardVpnConnectionCoordinator.markPending(domain.toOwner())
+
+        // Central mutual exclusion: a connection owned by another section must be fully
+        // stopped (confirmed by the daemon's stopped state) before this one may start.
+        if (_uiState.value.isConnected) {
+            stopEngineAndAwait()
+            if (!HardVpnConnectionCoordinator.isCurrent(operation) ||
+                _uiState.value.phase == ConnectionPhase.Error
+            ) {
+                connectGuard.set(false)
+                return false
+            }
+        }
 
         val chosen: SafeServer? = withContext(Dispatchers.IO) {
             if (domain == ConfigDomain.Home && repository.isAutoSelect(ConfigDomain.Home)) {
@@ -226,6 +245,7 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
 
         if (chosen == null) {
             connectGuard.set(false)
+            HardVpnConnectionCoordinator.markIdle()
             showBanner(
                 when {
                     domain == ConfigDomain.Manual -> "Select a manual configuration first"
@@ -245,6 +265,28 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         return true
     }
 
+    /**
+     * Stops the running engine and suspends until the daemon confirms termination
+     * (phase leaves Connected/Disconnecting) or a bounded timeout elapses. The next
+     * connection is never started before this returns.
+     */
+    private suspend fun stopEngineAndAwait() {
+        _uiState.value = _uiState.value.copy(phase = ConnectionPhase.Disconnecting)
+        engine.stop()
+        var waited = 0L
+        while (waited < STOP_CONFIRM_TIMEOUT_MS) {
+            if (_uiState.value.phase == ConnectionPhase.Disconnected ||
+                _uiState.value.phase == ConnectionPhase.Error
+            ) return
+            delay(STOP_CONFIRM_POLL_MS)
+            waited += STOP_CONFIRM_POLL_MS
+        }
+        _uiState.value = _uiState.value.copy(
+            phase = ConnectionPhase.Error,
+            statusMessage = "The previous connection did not stop. Try again.",
+        )
+    }
+
     /** Called after VpnService permission was granted (or when no permission is needed). */
     fun startEngine() {
         if (_uiState.value.isConnected) {
@@ -256,9 +298,11 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
             statusMessage = null,
         )
         engine.start()
+        val operation = connectionOperation
         connectTimeoutJob?.cancel()
         connectTimeoutJob = viewModelScope.launch {
             delay(CONNECT_TIMEOUT_MS)
+            if (!HardVpnConnectionCoordinator.isCurrent(operation)) return@launch
             if (_uiState.value.phase == ConnectionPhase.Connecting) {
                 // The daemon never confirmed the tunnel: report it instead of faking success.
                 _uiState.value = _uiState.value.copy(
@@ -271,6 +315,8 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun cancelPendingConnection() {
+        // Permission denied: no service start was requested, so just release the guard.
+        HardVpnConnectionCoordinator.nextOperation()
         connectGuard.set(false)
         if (_uiState.value.phase == ConnectionPhase.Connecting) {
             _uiState.value = _uiState.value.copy(
@@ -280,8 +326,25 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Real cancellation of an in-flight connection attempt: invalidates pending callbacks
+     * and asks the daemon to stop, instead of only changing the UI state.
+     */
+    fun cancelConnection() {
+        HardVpnConnectionCoordinator.nextOperation()
+        connectTimeoutJob?.cancel()
+        connectGuard.set(false)
+        if (_uiState.value.phase == ConnectionPhase.Connecting) {
+            _uiState.value = _uiState.value.copy(phase = ConnectionPhase.Disconnecting)
+            engine.stop()
+        }
+    }
+
     fun disconnect() {
         if (_uiState.value.phase == ConnectionPhase.Disconnecting) return
+        HardVpnConnectionCoordinator.nextOperation()
+        connectTimeoutJob?.cancel()
+        connectGuard.set(false)
         _uiState.value = _uiState.value.copy(phase = ConnectionPhase.Disconnecting)
         engine.stop()
     }
@@ -399,7 +462,6 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         loadManual()
         refreshActiveServer()
         _uiState.value = _uiState.value.copy(
-            boostSecurityEnabled = repository.isLocalDnsEnabled(),
             selectedHome = repository.selectedGuid(ConfigDomain.Home),
             selectedExplore = repository.selectedGuid(ConfigDomain.Explore),
             selectedManual = repository.selectedGuid(ConfigDomain.Manual),
@@ -434,10 +496,34 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
             val servers = repository.loadManual()
             _uiState.value = _uiState.value.copy(
                 manualServers = servers,
+                manualSources = repository.manualSources(),
                 manualLoading = false,
                 selectedManual = repository.selectedGuid(ConfigDomain.Manual),
             )
         }
+    }
+
+    /** Refreshes one Import Config subscription; only Import Config data is touched. */
+    fun refreshManualSource(sourceId: String) {
+        if (_uiState.value.refreshing) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(refreshing = true)
+            val report = repository.refresh(ConfigDomain.Manual, sourceId)
+            _uiState.value = _uiState.value.copy(refreshing = false)
+            loadManual()
+            showBanner(
+                if (report.updatedSources > 0) "Import Config subscription updated"
+                else "Refresh failed. Previously imported servers were kept.",
+                isError = report.updatedSources == 0,
+            )
+        }
+    }
+
+    /** Deletes one Import Config subscription and only its own configurations. */
+    fun removeManualSource(sourceId: String) {
+        repository.removeSource(ConfigDomain.Manual, sourceId)
+        loadManual()
+        showBanner("Import Config subscription removed")
     }
 
     private fun refreshActiveServer() {
@@ -475,10 +561,10 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         )
         refreshActiveServer()
         if (_uiState.value.isConnected) {
-            // The running tunnel keeps its old configuration until the daemon restarts.
-            engine.restartIfRunning()
-            resetTrafficBaseline()
-            showBanner("Reconnecting with the selected server")
+            // Selection never restarts the tunnel by itself. The running connection keeps
+            // its configuration until the user presses Connect, which goes through the
+            // centralized stop-confirm-start sequence.
+            showBanner("Selected. Press Connect to switch to it.")
         }
     }
 
@@ -657,28 +743,6 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // ------------------------------------------------------------------
-    // Boost Security
-    // ------------------------------------------------------------------
-
-    fun setBoostSecurity(enabled: Boolean) {
-        val written = repository.setLocalDnsEnabled(enabled)
-        _uiState.value = _uiState.value.copy(
-            boostSecurityEnabled = if (written) repository.isLocalDnsEnabled() else !enabled
-        )
-        showBanner(
-            when {
-                !written -> "This device could not store the security setting"
-                _uiState.value.isConnected ->
-                    "Saved. It takes effect on the next connection."
-
-                enabled -> "Local DNS protection enabled for the next connection"
-                else -> "Local DNS protection disabled for the next connection"
-            },
-            isError = !written,
-        )
-    }
-
-    // ------------------------------------------------------------------
     // DNS Gaming
     // ------------------------------------------------------------------
 
@@ -748,6 +812,20 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
+    /**
+     * Clears the DNS resolvers previously applied from DNS Gaming. This only removes
+     * HardVPN's own DNS settings; it never touches another app's VPN or system DNS.
+     */
+    fun deactivateDns() {
+        val cleared = repository.clearDns()
+        refreshDns()
+        showBanner(
+            if (cleared) "DNS settings cleared. They will no longer be applied."
+            else "DNS settings could not be cleared on this device",
+            isError = !cleared,
+        )
+    }
+
     fun requestEngineRestart() {
         engine.restartIfRunning()
     }
@@ -784,5 +862,7 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
         private const val MAX_AUTO_PING_SERVERS = 25
         private const val MAX_PING_SOURCES = 20
         private const val MAX_PING_SERVERS = 250
+        private const val STOP_CONFIRM_TIMEOUT_MS = 10_000L
+        private const val STOP_CONFIRM_POLL_MS = 100L
     }
 }
