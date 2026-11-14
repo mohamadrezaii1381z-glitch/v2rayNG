@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AngApplication
+import com.v2ray.ang.ui.hardvpn.data.HardVpnConnectionCoordinator
 import com.v2ray.ang.ui.hardvpn.data.HardVpnEngine
 import com.v2ray.ang.ui.hardvpn.data.HardVpnRepository
+import com.v2ray.ang.ui.hardvpn.data.toOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -85,6 +87,15 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     private var lastTrafficDownlink = 0L
     private var lastTrafficSampleAt = 0L
     private var pendingDomain: ConfigDomain = ConfigDomain.Home
+
+    /**
+     * Operation id of the newest connection request, issued by
+     * [HardVpnConnectionCoordinator.nextOperation]. Asynchronous callbacks (such as the
+     * connect-timeout) compare their captured id against the coordinator's current id and
+     * ignore themselves when a newer request has superseded them.
+     */
+    @Volatile
+    private var connectionOperation: Long = 0L
     private var initialized = false
 
     init {

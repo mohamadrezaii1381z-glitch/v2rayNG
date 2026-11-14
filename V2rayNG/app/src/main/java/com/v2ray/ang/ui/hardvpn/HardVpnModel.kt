@@ -213,13 +213,13 @@ fun detectCountryCode(remarks: String): String? {
         .sortedByDescending { it.key.length }
         .forEach { (alias, code) ->
             if (lowerHead == alias ||
-                lowerHead.startsWith("$alias ") ||
-                lowerHead.startsWith("$alias-") ||
-                lowerHead.startsWith("$alias_") ||
-                lowerHead.startsWith("$alias|") ||
-                lowerHead.startsWith("$alias:") ||
-                lowerHead.startsWith("$alias[") ||
-                lowerHead.startsWith("$alias(")
+                lowerHead.startsWith("${alias} ") ||
+                lowerHead.startsWith("${alias}-") ||
+                lowerHead.startsWith("${alias}_") ||
+                lowerHead.startsWith("${alias}|") ||
+                lowerHead.startsWith("${alias}:") ||
+                lowerHead.startsWith("${alias}[") ||
+                lowerHead.startsWith("${alias}(")
             ) return code
         }
 
@@ -228,8 +228,8 @@ fun detectCountryCode(remarks: String): String? {
         .sortedByDescending { it.value.length }
         .forEach { (code, name) ->
             val lowerName = name.lowercase(Locale.ROOT)
-            if (lowerHead == lowerName || lowerHead.startsWith("$lowerName ") ||
-                lowerHead.startsWith("$lowerName-") || lowerHead.startsWith("$lowerName_")
+            if (lowerHead == lowerName || lowerHead.startsWith("${lowerName} ") ||
+                lowerHead.startsWith("${lowerName}-") || lowerHead.startsWith("${lowerName}_")
             ) return code
         }
 
