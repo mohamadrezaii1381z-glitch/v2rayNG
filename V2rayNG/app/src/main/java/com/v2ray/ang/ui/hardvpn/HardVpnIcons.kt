@@ -37,6 +37,7 @@ enum class AppIcon {
     Check,
     Heart,
     Info,
+    Send,
 }
 
 @Composable
@@ -255,6 +256,15 @@ fun DrawIcon(icon: AppIcon, color: Color, modifier: Modifier = Modifier) {
                 )
                 line(0.66f, 0.12f, 0.86f, 0.22f)
                 line(0.86f, 0.22f, 0.76f, 0.4f)
+            }
+
+            AppIcon.Send -> {
+                // Paper-plane glyph used for the (not yet configured) Telegram bot entry.
+                line(0.12f, 0.5f, 0.88f, 0.14f)
+                line(0.88f, 0.14f, 0.62f, 0.86f)
+                line(0.62f, 0.86f, 0.42f, 0.6f)
+                line(0.42f, 0.6f, 0.12f, 0.5f)
+                line(0.42f, 0.6f, 0.88f, 0.14f)
             }
 
             AppIcon.Info -> {

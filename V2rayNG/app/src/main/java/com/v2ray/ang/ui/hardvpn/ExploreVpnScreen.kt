@@ -58,10 +58,18 @@ fun ExploreVpnScreen(
     onDestination: (HardVpnDestination) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var sortByPing by rememberSaveable { mutableStateOf(false) }
     val queryKey = remember(query) { searchKey(query.trim()) }
-    val visible = remember(state.explore.servers, queryKey) {
-        if (queryKey.isEmpty()) state.explore.servers
+    val visible = remember(state.explore.servers, queryKey, sortByPing) {
+        val filtered = if (queryKey.isEmpty()) state.explore.servers
         else state.explore.servers.filter { it.searchIndex.contains(queryKey) }
+        if (sortByPing) {
+            // Best real ping first; unmeasured servers stay at the end, never invented.
+            filtered.sortedWith(
+                compareBy<SafeServer> { !(it.hasMeasuredPing) }
+                    .thenBy { it.pingMs ?: Long.MAX_VALUE }
+            )
+        } else filtered
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Navy) {
@@ -77,6 +85,13 @@ fun ExploreVpnScreen(
                     title = "ExploreVPN",
                     subtitle = "Independent servers · stored separately from Home",
                     action = {
+                        // Telegram bot destination is not configured yet: shown disabled,
+                        // with no invented username or URL behind it.
+                        HeaderIcon(
+                            icon = AppIcon.Send,
+                            enabled = false,
+                            onClick = {},
+                        )
                         HeaderIcon(
                             icon = AppIcon.Refresh,
                             enabled = !state.refreshing,
@@ -121,6 +136,32 @@ fun ExploreVpnScreen(
                                 state = state,
                                 onConnectToggle = onConnectToggle,
                             )
+                        }
+                        item(key = "explore-get-config") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PrimaryButton(
+                                    text = if (state.refreshing) "Getting configs…" else "Get Config",
+                                    onClick = onRefresh,
+                                    enabled = !state.refreshing,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "Sort by ping (best first)",
+                                        color = Muted,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    PrimaryButton(
+                                        text = if (sortByPing) "Ping ↓" else "Default",
+                                        onClick = { sortByPing = !sortByPing },
+                                        outlined = !sortByPing,
+                                    )
+                                }
+                            }
                         }
                         item(key = "explore-search") {
                             SearchField(

@@ -365,6 +365,7 @@ fun ServerListRow(
                 Spacer(Modifier.width(12.dp))
             }
 
+            // Compact reference-style row: flag, friendly name and the real ping only.
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = server.displayName,
@@ -374,42 +375,25 @@ fun ServerListRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = server.location.ifBlank { server.sourceName },
-                    color = Color(0xFFD1DEEF),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = server.sourceName,
-                    color = Muted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (server.location.isNotBlank()) {
+                    Text(
+                        text = server.location,
+                        color = Color(0xFFD1DEEF),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             Spacer(Modifier.width(6.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = pingLabel(server.pingMs),
-                    color = pingColor(server.pingMs),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                )
-                Text(
-                    text = if (server.hasMeasuredPing) "measured" else "untested",
-                    color = Muted,
-                    fontSize = 10.sp,
-                )
-                Spacer(Modifier.height(4.dp))
-                SignalBars(
-                    pingMs = server.pingMs,
-                    modifier = Modifier.size(width = 17.dp, height = 14.dp),
-                )
-            }
+            Text(
+                text = pingLabel(server.pingMs),
+                color = pingColor(server.pingMs),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
             if (selected) {
                 Spacer(Modifier.width(8.dp))
                 Box(

@@ -57,8 +57,8 @@ fun ImportConfigScreen(
     onConnectToggle: () -> Unit,
     onImportText: (String?) -> Unit,
     onImportClipboard: () -> Unit,
-    onImportQr: () -> Unit,
-    onImportFile: () -> Unit,
+    onRefreshSource: (String) -> Unit,
+    onRemoveSource: (String) -> Unit,
     onManualEntry: (EConfigType) -> Unit,
     onEdit: (String) -> Unit,
     onRename: (String, String) -> Unit,
@@ -70,6 +70,7 @@ fun ImportConfigScreen(
     var showProtocolPicker by rememberSaveable { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SafeServer?>(null) }
     var deleteTarget by remember { mutableStateOf<SafeServer?>(null) }
+    var sourceDeleteTarget by remember { mutableStateOf<SourceUi?>(null) }
 
     if (showPaste) {
         PasteImportDialog(
@@ -113,6 +114,19 @@ fun ImportConfigScreen(
             },
         )
     }
+    sourceDeleteTarget?.let { target ->
+        ConfirmDialog(
+            title = "Delete subscription",
+            message = "\"${target.name}\" and its ${target.serverCount} configuration(s) will be removed from Import Config only. Home and ExploreVPN are not affected.",
+            confirmLabel = "Delete",
+            destructive = true,
+            onDismiss = { sourceDeleteTarget = null },
+            onConfirm = {
+                sourceDeleteTarget = null
+                onRemoveSource(target.id)
+            },
+        )
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Navy) {
         Column(
@@ -125,6 +139,28 @@ fun ImportConfigScreen(
                 title = "Import Config",
                 subtitle = "Your own configurations · stored separately",
                 action = {
+                    // The + button inspects the clipboard and intelligently imports either
+                    // an individual configuration link or a subscription URL.
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(ElectricBlue, RoundedCornerShape(50))
+                            .clickable(
+                                enabled = !state.importing,
+                                role = Role.Button,
+                                onClickLabel = "Add from clipboard",
+                                onClick = onImportClipboard,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "+",
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
                             .size(40.dp)
@@ -169,10 +205,25 @@ fun ImportConfigScreen(
                         importing = state.importing,
                         onPaste = { showPaste = true },
                         onClipboard = onImportClipboard,
-                        onQr = onImportQr,
-                        onFile = onImportFile,
                         onManualEntry = { showProtocolPicker = true },
                     )
+                }
+
+                if (state.manualSources.isNotEmpty()) {
+                    item(key = "manual-sources-heading") {
+                        SectionLabel(
+                            text = "Import Config subscriptions",
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                    items(items = state.manualSources, key = { "source-${it.id}" }) { source ->
+                        ManualSourceRow(
+                            source = source,
+                            refreshing = state.refreshing,
+                            onRefresh = { onRefreshSource(source.id) },
+                            onDelete = { sourceDeleteTarget = source },
+                        )
+                    }
                 }
 
                 item(key = "manual-heading") {
@@ -191,7 +242,7 @@ fun ImportConfigScreen(
                         EmptyState(
                             icon = AppIcon.Download,
                             title = "Nothing imported yet",
-                            body = "Paste a configuration link, scan a QR code, open a file, or enter one by hand. Subscription links belong to Home VPN or ExploreVPN sources.",
+                            body = "Tap + to add from the clipboard, paste a configuration or subscription link, or enter one by hand. Everything stays inside Import Config.",
                         )
                     }
                 } else {
@@ -217,6 +268,12 @@ fun ImportConfigScreen(
                     )
                 }
             }
+
+            ImportBottomControls(
+                state = state,
+                onPing = onPing,
+                onConnectToggle = onConnectToggle,
+            )
 
             HardVpnBottomNavigation(
                 selected = HardVpnDestination.ImportConfig,
@@ -299,8 +356,6 @@ private fun ImportActionsCard(
     importing: Boolean,
     onPaste: () -> Unit,
     onClipboard: () -> Unit,
-    onQr: () -> Unit,
-    onFile: () -> Unit,
     onManualEntry: () -> Unit,
 ) {
     HardVpnCard(modifier = Modifier.fillMaxWidth()) {
@@ -314,7 +369,7 @@ private fun ImportActionsCard(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Supported links, QR codes, files and manual entry. Everything stays in this section.",
+                text = "The clipboard is inspected automatically: an individual configuration link is imported directly, and a subscription URL becomes an Import Config subscription. No camera or media access is needed.",
                 color = Muted,
                 fontSize = 10.sp,
                 lineHeight = 14.sp,
@@ -328,25 +383,8 @@ private fun ImportActionsCard(
                     modifier = Modifier.weight(1f),
                 )
                 PrimaryButton(
-                    text = "Clipboard",
+                    text = "Clipboard (+)",
                     onClick = onClipboard,
-                    enabled = !importing,
-                    outlined = true,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton(
-                    text = "QR code",
-                    onClick = onQr,
-                    enabled = !importing,
-                    outlined = true,
-                    modifier = Modifier.weight(1f),
-                )
-                PrimaryButton(
-                    text = "File",
-                    onClick = onFile,
                     enabled = !importing,
                     outlined = true,
                     modifier = Modifier.weight(1f),
@@ -465,6 +503,100 @@ private fun ManualServerRow(
 }
 
 @Composable
+private fun ManualSourceRow(
+    source: SourceUi,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    HardVpnCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = source.name,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${source.serverCount} configuration(s)" +
+                        if (source.failedLastRefresh) " · last refresh failed, previous kept" else "",
+                    color = Muted,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            PrimaryButton(
+                text = "Refresh",
+                onClick = onRefresh,
+                enabled = !refreshing,
+                outlined = true,
+            )
+            Spacer(Modifier.width(8.dp))
+            PrimaryButton(
+                text = "Delete",
+                onClick = onDelete,
+                destructive = true,
+            )
+        }
+    }
+}
+
+/** Bottom connection controls: selected configuration, ping test and Connect. */
+@Composable
+private fun ImportBottomControls(
+    state: HardVpnUiState,
+    onPing: () -> Unit,
+    onConnectToggle: () -> Unit,
+) {
+    val selected = state.manualServers.firstOrNull { it.guid == state.selectedManual }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFF0D1B2E),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            Text(
+                text = selected?.let { "Selected: ${it.displayName}" } ?: "No configuration selected",
+                color = if (selected != null) Color.White else Muted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton(
+                    text = "Ping test",
+                    onClick = onPing,
+                    enabled = !state.pingRunning && state.manualServers.isNotEmpty(),
+                    outlined = true,
+                    modifier = Modifier.weight(1f),
+                )
+                PrimaryButton(
+                    text = when {
+                        state.isConnected && state.activeDomain == ConfigDomain.Manual -> "Disconnect"
+                        state.isConnected -> "Connect (switch)"
+                        state.phase == ConnectionPhase.Connecting -> "Cancel"
+                        else -> "Connect"
+                    },
+                    onClick = onConnectToggle,
+                    enabled = state.phase != ConnectionPhase.Disconnecting,
+                    modifier = Modifier.weight(2f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PasteImportDialog(
     importing: Boolean,
     onDismiss: () -> Unit,
@@ -480,7 +612,7 @@ private fun PasteImportDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Paste a supported configuration link or text. Subscription links are rejected here on purpose.",
+                    text = "Paste a supported configuration link or a subscription URL. Subscriptions stay inside Import Config.",
                     color = Muted,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,

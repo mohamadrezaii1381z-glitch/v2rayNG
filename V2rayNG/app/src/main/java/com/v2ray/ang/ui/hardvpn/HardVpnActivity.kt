@@ -36,7 +36,8 @@ import kotlinx.coroutines.launch
  * HardVPN launcher activity.
  *
  * It owns the Android-specific parts the Compose UI must not know about: the VpnService
- * permission handshake, QR/file/clipboard import and the existing v2rayNG profile editors.
+ * permission handshake, clipboard import (no camera or media permissions) and the
+ * existing v2rayNG profile editors.
  * All connection state still comes from [HardVpnViewModel], which is fed by the daemon.
  */
 class HardVpnActivity : HelperBaseComponentActivity() {
@@ -110,8 +111,6 @@ class HardVpnActivity : HelperBaseComponentActivity() {
             onConnectRequest = { domain -> requestConnect(domain) },
             onDisconnect = { viewModel.disconnect() },
             onImportClipboard = { importClipboard() },
-            onImportQr = { importQr() },
-            onImportFile = { importFile() },
             onManualEntry = { type -> openManualEntry(type) },
             onEditManual = { guid -> openManualEditor(guid) },
         )
@@ -140,28 +139,6 @@ class HardVpnActivity : HelperBaseComponentActivity() {
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "HardVPN: failed to read clipboard", e)
             viewModel.showBanner("Clipboard is empty or unavailable", isError = true)
-        }
-    }
-
-    private fun importQr() {
-        launchQRCodeScanner { scanResult ->
-            if (scanResult != null) {
-                viewModel.importText(scanResult)
-            }
-        }
-    }
-
-    private fun importFile() {
-        launchFileChooser { uri ->
-            if (uri == null) return@launchFileChooser
-            try {
-                contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
-                    viewModel.importText(reader.readText())
-                }
-            } catch (e: Exception) {
-                LogUtil.e(AppConfig.TAG, "HardVPN: failed to read imported file", e)
-                viewModel.showBanner("The selected file could not be read", isError = true)
-            }
         }
     }
 

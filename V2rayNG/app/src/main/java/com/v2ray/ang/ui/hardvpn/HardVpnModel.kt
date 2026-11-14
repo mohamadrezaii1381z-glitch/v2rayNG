@@ -141,7 +141,8 @@ private val KNOWN_COUNTRY_CODES: Set<String> = setOf(
 )
 
 private val KNOWN_COUNTRY_NAMES: Map<String, String> = mapOf(
-    "AE" to "United Arab Emirates", "AM" to "Armenia", "AT" to "Austria",
+    "AE" to "United Arab Emirates", "AM" to "Armenia", "AR" to "Argentina",
+    "AT" to "Austria", "EG" to "Egypt",
     "AU" to "Australia", "AZ" to "Azerbaijan", "BE" to "Belgium", "BR" to "Brazil",
     "CA" to "Canada", "CH" to "Switzerland", "CN" to "China", "CZ" to "Czechia",
     "DE" to "Germany", "DK" to "Denmark", "EE" to "Estonia", "ES" to "Spain",
@@ -158,37 +159,84 @@ private val KNOWN_COUNTRY_NAMES: Map<String, String> = mapOf(
     "US" to "United States", "UZ" to "Uzbekistan", "VN" to "Vietnam", "ZA" to "South Africa",
 )
 
+/** Country-name aliases accepted at the very beginning of a configuration name. */
+private val COUNTRY_PREFIX_ALIASES: Map<String, String> = mapOf(
+    "germany" to "DE", "france" to "FR", "united states" to "US", "usa" to "US",
+    "us" to "US", "italy" to "IT", "turkey" to "TR", "türkiye" to "TR",
+    "turkiye" to "TR", "netherlands" to "NL", "united kingdom" to "GB", "uk" to "GB",
+    "canada" to "CA", "japan" to "JP", "singapore" to "SG", "poland" to "PL",
+    "sweden" to "SE", "finland" to "FI", "russia" to "RU", "ukraine" to "UA",
+    "india" to "IN", "brazil" to "BR", "switzerland" to "CH", "spain" to "ES",
+    "denmark" to "DK", "norway" to "NO", "austria" to "AT", "belgium" to "BE",
+    "australia" to "AU", "ireland" to "IE", "portugal" to "PT", "greece" to "GR",
+    "czechia" to "CZ", "romania" to "RO", "hungary" to "HU", "south korea" to "KR",
+    "korea" to "KR", "china" to "CN", "taiwan" to "TW", "hong kong" to "HK",
+    "indonesia" to "ID", "malaysia" to "MY", "thailand" to "TH", "vietnam" to "VN",
+    "philippines" to "PH", "new zealand" to "NZ", "mexico" to "MX",
+    "argentina" to "AR", "south africa" to "ZA", "egypt" to "EG", "israel" to "IL",
+    "united arab emirates" to "AE", "saudi arabia" to "SA", "qatar" to "QA",
+    "kazakhstan" to "KZ", "uzbekistan" to "UZ", "azerbaijan" to "AZ",
+    "armenia" to "AM", "lithuania" to "LT", "latvia" to "LV", "estonia" to "EE",
+    "slovakia" to "SK", "serbia" to "RS", "moldova" to "MD", "iran" to "IR",
+)
+
 /**
  * Best-effort, privacy-safe location label derived from a friendly remark.
  *
- * Only a country code / country name / flag emoji already present in the remark is used;
- * nothing is inferred from network metadata and no address is read.
+ * Prefix matching only: a flag emoji, country name, alias or two-letter code is honoured
+ * only at the very beginning of the name (after optional leading symbols/brackets), so a
+ * country word in the middle of an unrelated remark can never produce a false location.
+ * Nothing is inferred from network metadata and no address is read.
  */
 fun detectCountryCode(remarks: String): String? {
     val text = remarks.trim()
     if (text.isEmpty()) return null
 
-    // Regional indicator pair (a flag emoji such as 🇩🇪).
+    // Regional indicator pair (a flag emoji such as 🇩🇪) at the start.
     val emoji = text.codePoints().toArray().toList()
-    for (i in 0 until emoji.size - 1) {
-        val first = emoji[i] - 0x1F1E6
-        val second = emoji[i + 1] - 0x1F1E6
+    if (emoji.size >= 2) {
+        val first = emoji[0] - 0x1F1E6
+        val second = emoji[1] - 0x1F1E6
         if (first in 0..25 && second in 0..25) {
             val code = "${('A' + first)}${('A' + second)}"
             if (KNOWN_COUNTRY_CODES.contains(code)) return normalizeCountryCode(code)
         }
     }
 
-    // Country name, longest first so "United Kingdom" wins over "United".
+    // Strip leading separators/brackets, then require a prefix match.
+    val head = text.trimStart { !it.isLetter() }
+    if (head.isEmpty()) return null
+    val lowerHead = head.lowercase(Locale.ROOT)
+
+    // Country name / alias at the beginning, longest first ("united kingdom" beats "uk").
+    COUNTRY_PREFIX_ALIASES.entries
+        .sortedByDescending { it.key.length }
+        .forEach { (alias, code) ->
+            if (lowerHead == alias ||
+                lowerHead.startsWith("$alias ") ||
+                lowerHead.startsWith("$alias-") ||
+                lowerHead.startsWith("$alias_") ||
+                lowerHead.startsWith("$alias|") ||
+                lowerHead.startsWith("$alias:") ||
+                lowerHead.startsWith("$alias[") ||
+                lowerHead.startsWith("$alias(")
+            ) return code
+        }
+
+    // Official display names at the beginning (e.g. "Türkiye 01").
     KNOWN_COUNTRY_NAMES.entries
         .sortedByDescending { it.value.length }
         .forEach { (code, name) ->
-            if (text.contains(name, ignoreCase = true)) return code
+            val lowerName = name.lowercase(Locale.ROOT)
+            if (lowerHead == lowerName || lowerHead.startsWith("$lowerName ") ||
+                lowerHead.startsWith("$lowerName-") || lowerHead.startsWith("$lowerName_")
+            ) return code
         }
 
-    // An explicit two-letter token such as "DE-01", "us east" or "[NL]".
-    Regex("(?<![A-Za-z])([A-Za-z]{2})(?![A-Za-z])").findAll(text).forEach { match ->
-        val candidate = match.groupValues[1].uppercase(Locale.ROOT)
+    // A two-letter code as the first token only, e.g. "DE-01", "[NL] fast", "us east".
+    val firstToken = head.takeWhile { it.isLetter() }
+    if (firstToken.length == 2) {
+        val candidate = firstToken.uppercase(Locale.ROOT)
         if (KNOWN_COUNTRY_CODES.contains(candidate)) return normalizeCountryCode(candidate)
     }
     return null

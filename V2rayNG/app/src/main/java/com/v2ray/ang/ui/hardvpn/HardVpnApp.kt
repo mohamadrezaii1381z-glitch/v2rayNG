@@ -1,6 +1,11 @@
 package com.v2ray.ang.ui.hardvpn
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,14 +35,15 @@ import com.v2ray.ang.enums.EConfigType
  * source manager, Premium and Sponsors are full-screen overlays with their own back handling, so
  * the bottom navigation always shows exactly the four required destinations and nothing else.
  */
+/** How long a temporary in-app feedback banner stays visible before auto-dismissing. */
+private const val BANNER_AUTO_DISMISS_MS = 2_000L
+
 @Composable
 fun HardVpnApp(
     viewModel: HardVpnViewModel,
     onConnectRequest: (ConfigDomain) -> Unit,
     onDisconnect: () -> Unit,
     onImportClipboard: () -> Unit,
-    onImportQr: () -> Unit,
-    onImportFile: () -> Unit,
     onManualEntry: (EConfigType) -> Unit,
     onEditManual: (String) -> Unit,
 ) {
@@ -61,22 +68,11 @@ fun HardVpnApp(
 
     fun handleConnectToggle(domain: ConfigDomain) {
         when {
+            // Same owner: disconnect. Different owner: the centralized coordinator stops
+            // the current connection, confirms termination, then starts the new one.
             state.isConnected && state.activeDomain == domain -> onDisconnect()
-            state.isConnected -> {
-                val selected = when (domain) {
-                    ConfigDomain.Home -> state.selectedHome
-                    ConfigDomain.Explore -> state.selectedExplore
-                    ConfigDomain.Manual -> state.selectedManual
-                }
-                if (selected != null) {
-                    // Switching domains reuses the daemon restart path, never a second tunnel.
-                    viewModel.selectServer(domain, selected)
-                } else {
-                    onDisconnect()
-                }
-            }
-
-            state.isBusy -> Unit
+            state.phase == ConnectionPhase.Connecting -> viewModel.cancelConnection()
+            state.phase == ConnectionPhase.Disconnecting -> Unit
             else -> onConnectRequest(domain)
         }
     }
@@ -139,9 +135,6 @@ fun HardVpnApp(
                     onToggleConnection = { handleConnectToggle(ConfigDomain.Home) },
                     onPremiumClick = { overlay = "premium" },
                     onServerCardClick = { overlay = "homePicker" },
-                    onBoostToggle = {
-                        viewModel.setBoostSecurity(!state.boostSecurityEnabled)
-                    },
                     onSponsorsClick = { overlay = "sponsors" },
                     onSampleTraffic = { viewModel.sampleTraffic() },
                     onDestination = { viewModel.onDestinationSelected(it) },
@@ -167,6 +160,7 @@ fun HardVpnApp(
                     onApplyProfile = { viewModel.applyDnsProfile(it) },
                     onSaveProfile = { viewModel.saveDnsProfile(it) },
                     onDeleteProfile = { viewModel.deleteDnsProfile(it) },
+                    onDeactivateDns = { viewModel.deactivateDns() },
                     onDestination = { viewModel.onDestinationSelected(it) },
                 )
 
@@ -176,8 +170,8 @@ fun HardVpnApp(
                     onConnectToggle = { handleConnectToggle(ConfigDomain.Manual) },
                     onImportText = { viewModel.importText(it) },
                     onImportClipboard = onImportClipboard,
-                    onImportQr = onImportQr,
-                    onImportFile = onImportFile,
+                    onRefreshSource = { viewModel.refreshManualSource(it) },
+                    onRemoveSource = { viewModel.removeManualSource(it) },
                     onManualEntry = onManualEntry,
                     onEdit = onEditManual,
                     onRename = { guid, name -> viewModel.renameManual(guid, name) },
@@ -188,19 +182,33 @@ fun HardVpnApp(
             }
         }
 
-        // Transient, honest feedback. Banners never contain configuration data.
-        state.banner?.let { banner ->
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .safeDrawingPadding()
-                    .padding(top = 8.dp),
-            ) {
-                InfoBanner(
-                    message = banner.message,
-                    isError = banner.isError,
-                    onDismiss = { viewModel.dismissBanner(banner.id) },
-                )
+        // Transient, honest feedback. Every banner auto-dismisses after ~2 seconds;
+        // a newer banner cancels the previous banner's dismissal timer because the
+        // effect is keyed by banner id. Banners never contain configuration data.
+        val banner = state.banner
+        LaunchedEffect(banner?.id) {
+            if (banner != null) {
+                kotlinx.coroutines.delay(BANNER_AUTO_DISMISS_MS)
+                viewModel.dismissBanner(banner.id)
+            }
+        }
+        AnimatedVisibility(
+            visible = banner != null,
+            enter = fadeIn() + slideInVertically { -it / 2 },
+            exit = fadeOut() + slideOutVertically { -it / 2 },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .safeDrawingPadding()
+                .padding(top = 8.dp),
+        ) {
+            if (banner != null) {
+                Column {
+                    InfoBanner(
+                        message = banner.message,
+                        isError = banner.isError,
+                        onDismiss = { viewModel.dismissBanner(banner.id) },
+                    )
+                }
             }
         }
     }

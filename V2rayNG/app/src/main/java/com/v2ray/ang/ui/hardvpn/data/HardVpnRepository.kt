@@ -130,12 +130,24 @@ class HardVpnRepository(private val app: AngApplication) {
             )
         }
 
-    /** Manual bucket contents, sorted with the newest import first. */
+    /** Manual bucket contents plus configurations owned by Import Config subscriptions. */
     suspend fun loadManual(): List<SafeServer> = withContext(Dispatchers.IO) {
-        MmkvManager.decodeServerList(MANUAL_BUCKET).mapNotNull { guid ->
+        val servers = ArrayList<SafeServer>()
+        MmkvManager.decodeServerList(MANUAL_BUCKET).forEach { guid ->
             toSafeServer(guid, ConfigDomain.Manual, MANUAL_BUCKET, "Manual import")
+                ?.let { servers.add(it) }
         }
+        loadSources(ConfigDomain.Manual).forEach { source ->
+            MmkvManager.decodeServerList(source.id).forEach { guid ->
+                toSafeServer(guid, ConfigDomain.Manual, source.id, source.name)
+                    ?.let { servers.add(it) }
+            }
+        }
+        servers
     }
+
+    /** Import Config subscription sources (names and counts only, never URLs). */
+    fun manualSources(): List<SourceUi> = loadSources(ConfigDomain.Manual)
 
     /**
      * Projects one stored profile into the safe display model.
@@ -255,7 +267,6 @@ class HardVpnRepository(private val app: AngApplication) {
             return@withContext AddSourceResult.Rejected("This is not a supported subscription URL")
         }
         val duplicate = ConfigDomain.entries
-            .filter { it != ConfigDomain.Manual }
             .flatMap { sourceIds(it) }
             .any { MmkvManager.decodeSubscription(it)?.url == trimmedUrl }
         if (duplicate) {
@@ -376,14 +387,29 @@ class HardVpnRepository(private val app: AngApplication) {
                 success = false,
             )
         }
-        val subscriptionLine = content.lines().firstOrNull { Utils.isValidSubUrl(it.trim()) }
+        val subscriptionLine = content.lines()
+            .map { it.trim() }
+            .firstOrNull { Utils.isValidSubUrl(it) }
         if (subscriptionLine != null) {
-            return@withContext ManualImportResult(
-                importedConfigs = 0,
-                importedSubscriptions = 0,
-                message = "Subscription links belong to Home VPN or ExploreVPN sources",
-                success = false,
-            )
+            // Clipboard subscription: owned exclusively by Import Config, fetched through
+            // the existing subscription updater and displayed only inside Import Config.
+            return@withContext when (
+                val added = addSource(ConfigDomain.Manual, "Import Config", subscriptionLine)
+            ) {
+                is AddSourceResult.Added -> ManualImportResult(
+                    importedConfigs = 0,
+                    importedSubscriptions = 1,
+                    message = "Subscription added to Import Config",
+                    success = true,
+                )
+
+                is AddSourceResult.Rejected -> ManualImportResult(
+                    importedConfigs = 0,
+                    importedSubscriptions = 0,
+                    message = added.reason,
+                    success = false,
+                )
+            }
         }
 
         val result = runCatching {
@@ -407,20 +433,24 @@ class HardVpnRepository(private val app: AngApplication) {
         )
     }
 
-    /** Renames a manually stored profile; allowed only inside the manual bucket. */
+    /** Renames a profile owned by Import Config (manual bucket or an Import subscription). */
     fun renameManualProfile(guid: String, newName: String): Boolean {
         val profile = MmkvManager.decodeServerConfig(guid) ?: return false
-        if (profile.subscriptionId != MANUAL_BUCKET) return false
+        if (profile.subscriptionId != MANUAL_BUCKET &&
+            !sourceIds(ConfigDomain.Manual).contains(profile.subscriptionId)
+        ) return false
         profile.remarks = newName.trim().take(64)
         if (profile.remarks.isEmpty()) return false
         MmkvManager.encodeServerConfig(guid, profile)
         return true
     }
 
-    /** Deletes a manually stored profile; allowed only inside the manual bucket. */
+    /** Deletes a profile owned by Import Config (manual bucket or an Import subscription). */
     fun removeManualProfile(guid: String): Boolean {
         val profile = MmkvManager.decodeServerConfig(guid) ?: return false
-        if (profile.subscriptionId != MANUAL_BUCKET) return false
+        if (profile.subscriptionId != MANUAL_BUCKET &&
+            !sourceIds(ConfigDomain.Manual).contains(profile.subscriptionId)
+        ) return false
         MmkvManager.removeServer(guid)
         if (selectedGuid(ConfigDomain.Manual) == guid) {
             MmkvManager.encodeSettings(selectedKey(ConfigDomain.Manual), "")
@@ -502,6 +532,16 @@ class HardVpnRepository(private val app: AngApplication) {
         } else {
             false
         }
+    }
+
+    /** Clears resolvers previously applied from DNS Gaming and forgets the active profile. */
+    fun clearDns(): Boolean {
+        val remoteOk = MmkvManager.encodeSettings(AppConfig.PREF_REMOTE_DNS, "")
+        val vpnOk = MmkvManager.encodeSettings(AppConfig.PREF_VPN_DNS, "")
+        if (remoteOk && vpnOk) {
+            MmkvManager.encodeSettings(DNS_ACTIVE, "")
+        }
+        return remoteOk && vpnOk
     }
 
     fun currentRemoteDns(): String =
