@@ -6,10 +6,56 @@ set -o nounset
 __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 __file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
 __base="$(basename ${__file} .sh)"
-if [[ ! -d $NDK_HOME ]]; then
-  echo "Android NDK: NDK_HOME not found. please set env \$NDK_HOME"
+# --- Resolve and validate NDK_HOME (Linux, macOS, Windows Git Bash/MSYS2) ---
+# Note: with `set -o nounset`, referencing an unset $NDK_HOME would abort the
+# script with an unbound-variable error, so always use the :- default form.
+if [[ -z "${NDK_HOME:-}" ]]; then
+  echo "Android NDK: NDK_HOME is not set. Please set env \$NDK_HOME to your NDK directory."
   exit 1
 fi
+# Git Bash users often export NDK_HOME as a Windows path (C:\Users\...\ndk\...).
+# Normalize it to a POSIX path when cygpath is available so every later test
+# and invocation behaves the same on all platforms.
+if command -v cygpath >/dev/null 2>&1; then
+  NDK_HOME="$(cygpath -u "$NDK_HOME")"
+fi
+if [[ ! -d "$NDK_HOME" ]]; then
+  echo "Android NDK: NDK_HOME directory not found: $NDK_HOME"
+  exit 1
+fi
+
+# --- Detect the correct ndk-build executable for this platform ---
+# Linux/macOS NDKs and modern Windows NDKs ship a Unix shell script at
+#   $NDK_HOME/build/ndk-build
+# Older layouts place it at $NDK_HOME/ndk-build. Windows additionally ships
+# .cmd batch wrappers (ndk-build.cmd), which cannot be executed directly by
+# Bash and are only a last-resort fallback through cmd.exe.
+NDK_BUILD=""
+NDK_BUILD_CMD=""
+if [[ -f "$NDK_HOME/build/ndk-build" ]]; then
+  NDK_BUILD="$NDK_HOME/build/ndk-build"
+elif [[ -f "$NDK_HOME/ndk-build" ]]; then
+  NDK_BUILD="$NDK_HOME/ndk-build"
+elif [[ -f "$NDK_HOME/build/ndk-build.cmd" ]]; then
+  NDK_BUILD_CMD="$NDK_HOME/build/ndk-build.cmd"
+elif [[ -f "$NDK_HOME/ndk-build.cmd" ]]; then
+  NDK_BUILD_CMD="$NDK_HOME/ndk-build.cmd"
+else
+  echo "Android NDK: ndk-build not found under $NDK_HOME (looked in build/ and NDK root)."
+  exit 1
+fi
+
+# Invoke ndk-build portably:
+# - Prefer the Unix shell script, executed through bash so a missing
+#   executable bit (common after unzipping the NDK on Windows) is harmless.
+# - Fall back to the .cmd wrapper via cmd.exe with a Windows-style path.
+run_ndk_build() {
+  if [[ -n "$NDK_BUILD" ]]; then
+    bash "$NDK_BUILD" "$@"
+  else
+    MSYS2_ARG_CONV_EXCL="*" cmd //c "$(cygpath -w "$NDK_BUILD_CMD")" "$@"
+  fi
+}
 TMPDIR=$(mktemp -d)
 clear_tmp () {
   rm -rf $TMPDIR
@@ -21,13 +67,18 @@ ABIS="armeabi-v7a arm64-v8a x86 x86_64"
 mkdir -p "$TMPDIR/jni"
 pushd "$TMPDIR"
 
-ln -s "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel
+# Link the HEV sources into the temp build tree. On Windows Git Bash without
+# Developer Mode, `ln -s` cannot always create a real symlink, so fall back to
+# a plain copy of the submodule (build output is identical either way).
+if ! ln -s "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel 2>/dev/null; then
+  cp -r "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel
+fi
 
 # 1) JNI shared library (libhev-socks5-tunnel.so) — loaded in-process by
 #    com.v2ray.ang.service.TProxyService for the VpnService hev tun mode.
 echo 'include $(call all-subdir-makefiles)' > jni/Android.mk
 
-"$NDK_HOME/ndk-build" \
+run_ndk_build \
     NDK_PROJECT_PATH=. \
     APP_BUILD_SCRIPT=jni/Android.mk \
     "APP_ABI=$ABIS" \
@@ -80,7 +131,7 @@ LOCAL_LDFLAGS += -Wl,-z,common-page-size=16384
 include $(BUILD_EXECUTABLE)
 EXECMK
 
-"$NDK_HOME/ndk-build" \
+run_ndk_build \
     NDK_PROJECT_PATH=. \
     APP_BUILD_SCRIPT=jni/exec.mk \
     "APP_ABI=$ABIS" \
