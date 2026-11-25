@@ -99,5 +99,17 @@ for abi in $ABIS; do
   cp "$TMPDIR/libs-exec/$abi/hevsockstun" "$__dir/libs/$abi/libhevsockstun.so"
 done
 
+# Stage the same artifacts where Gradle actually packages them from
+# (V2rayNG/app/libs, see jniLibs.srcDirs("libs") in app/build.gradle.kts).
+# CI used to perform this copy as a separate manual step; doing it here makes
+# a local `bash compile-hevtun.sh` sufficient to produce a working APK and
+# prevents shipping an APK that crashes with UnsatisfiedLinkError because
+# libhev-socks5-tunnel.so was never copied into the app module.
+if [[ -d "$__dir/V2rayNG/app" ]]; then
+  mkdir -p "$__dir/V2rayNG/app/libs"
+  cp -r "$__dir/libs/"* "$__dir/V2rayNG/app/libs/"
+  echo "Staged native libraries into $__dir/V2rayNG/app/libs"
+fi
+
 popd
 rm -rf $TMPDIR

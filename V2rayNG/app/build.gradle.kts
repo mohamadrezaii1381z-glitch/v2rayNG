@@ -163,6 +163,35 @@ android {
 
 }
 
+// Packaging guard: TProxyService loads "hev-socks5-tunnel" via JNI at runtime.
+// If libhev-socks5-tunnel.so is missing from app/libs/<abi>/, the APK still builds
+// but crashes on Connect with UnsatisfiedLinkError (observed on a real device).
+// Fail APK packaging with an actionable message instead of shipping a broken APK.
+// Unit tests and other non-packaging tasks are not affected.
+val verifyHevJniLibs by tasks.registering {
+    description = "Verifies libhev-socks5-tunnel.so exists for every packaged ABI."
+    doLast {
+        val abiFilters = providers.gradleProperty("ABI_FILTERS").orNull
+            ?.split(';')
+            ?.filter { it.isNotBlank() }
+            ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+        val libsDir = layout.projectDirectory.dir("libs")
+        val missing = abiFilters.filter { abi ->
+            !libsDir.file("$abi/libhev-socks5-tunnel.so").asFile.isFile
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Missing libhev-socks5-tunnel.so for ABI(s) $missing under " +
+                    "app/libs/<abi>/. Build it first with `bash compile-hevtun.sh` " +
+                    "(requires the hev-socks5-tunnel submodule and NDK_HOME), " +
+                    "which stages the library into app/libs automatically."
+            )
+        }
+    }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }
+    .configureEach { dependsOn(verifyHevJniLibs) }
+
 dependencies {
     // Core Libraries
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
