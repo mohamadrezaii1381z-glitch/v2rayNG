@@ -101,6 +101,14 @@ class HardVpnViewModel(application: Application) : AndroidViewModel(application)
     init {
         collectEngineEvents()
         refreshAll()
+        // First-launch geodata initialization, off the main thread: install
+        // geosite.dat/geoip.dat from the APK assets as soon as HardVPN opens
+        // so a fresh install can connect without ever opening the upstream
+        // main screen. engine.start() re-checks synchronously before the
+        // core starts, so this is an optimization, not the only guarantee.
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { engine.prepareGeoAssets() }
+        }
     }
 
     // ------------------------------------------------------------------

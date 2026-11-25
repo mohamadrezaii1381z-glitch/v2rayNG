@@ -55,7 +55,7 @@ class HardVpnEngine(private val app: AngApplication) : Closeable {
         override fun onReceive(context: Context?, intent: Intent?) {
             val safeIntent = intent ?: return
             val key = safeIntent.getIntExtra("key", 0)
-            val content = safeIntent.getStringExtra("content").orEmpty()
+            val content = stringContentExtra(safeIntent)
             val requestId = safeIntent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID).orEmpty()
             val event = when (key) {
                 AppConfig.MSG_STATE_RUNNING -> EngineEvent.Running
@@ -92,6 +92,28 @@ class HardVpnEngine(private val app: AngApplication) : Closeable {
         }
     }
 
+    companion object {
+        /**
+         * Reads the broadcast `content` extra as a String without ever
+         * throwing. The same broadcast action also carries Serializable
+         * payloads (e.g. ping result objects sent for the upstream UI), and
+         * `Intent.getStringExtra` on such an intent throws
+         * ClassCastException on the device (the value arrives as a lazy
+         * parcelled object, not a String). String payloads — start-failure
+         * reasons, traffic totals, ping progress — are returned intact;
+         * anything else maps to an empty string, which the handlers for the
+         * string-carrying message keys already treat as "no detail".
+         */
+        fun stringContentExtra(intent: Intent): String = try {
+            intent.extras?.let { extras -> stringExtraValue(extras.get("content")) }.orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+
+        /** Pure type check behind [stringContentExtra]; kept Android-free for unit tests. */
+        fun stringExtraValue(value: Any?): String = value as? String ?: ""
+    }
+
     private fun parseTraffic(content: String): EngineEvent.Traffic? {
         val parts = content.split(',')
         if (parts.size < 2) return null
@@ -105,7 +127,29 @@ class HardVpnEngine(private val app: AngApplication) : Closeable {
     /** Engine selection that the daemon will actually start. */
     fun selectedGuid(): String? = MmkvManager.getSelectServer()
 
+    /**
+     * Ensures the geodata files Xray needs (`geosite.dat`, `geoip.dat`) are
+     * installed in the app_assets directory before the core starts.
+     *
+     * HardVpnActivity is the launcher entry, so the upstream main screen's
+     * own initialization (`MainViewModel.initialize`) may never have run on a
+     * fresh install; starting the core without this step made Xray fail with
+     * "failed to open geosite.dat" for any config using geosite: rules. This
+     * reuses the existing upstream mechanism ([SettingsManager.initAssets]),
+     * which copies the files bundled inside the APK — fully offline, no VPN
+     * connection or manual file copy required. Once the files are complete
+     * this is only a size check, so it is safe to run on every start.
+     */
+    fun prepareGeoAssets() {
+        try {
+            SettingsManager.initAssets(app, app.assets)
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "HardVPN: geodata initialization failed", e)
+        }
+    }
+
     fun start() {
+        prepareGeoAssets()
         LauncherManager.startService(app)
     }
 

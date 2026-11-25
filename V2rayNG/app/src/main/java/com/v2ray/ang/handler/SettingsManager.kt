@@ -29,7 +29,6 @@ import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import java.io.File
-import java.io.FileOutputStream
 import kotlin.random.Random
 
 object SettingsManager {
@@ -306,23 +305,50 @@ object SettingsManager {
      */
     fun initAssets(context: Context, assets: AssetManager) {
         val extFolder = Utils.userAssetPath(context)
+        if (extFolder.isEmpty()) {
+            LogUtil.e(ANG_PACKAGE, "asset copy failed: user asset path unavailable")
+            return
+        }
 
-        try {
-            val geo = arrayOf(AppConfig.GEOSITE_DAT, AppConfig.GEOIP_DAT, AppConfig.GEOIP_ONLY_CN_PRIVATE_DAT)
-            assets.list("")
-                ?.filter { geo.contains(it) }
-                ?.filter { !File(extFolder, it).exists() }
-                ?.forEach {
-                    val target = File(extFolder, it)
-                    assets.open(it).use { input ->
-                        FileOutputStream(target).use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    LogUtil.i(AppConfig.TAG, "Copied from apk assets folder to ${target.absolutePath}")
-                }
+        val geo = arrayOf(AppConfig.GEOSITE_DAT, AppConfig.GEOIP_DAT, AppConfig.GEOIP_ONLY_CN_PRIVATE_DAT)
+        val available = try {
+            assets.list("")?.toList().orEmpty()
         } catch (e: Exception) {
             LogUtil.e(ANG_PACKAGE, "asset copy failed", e)
+            return
+        }
+
+        // Copy (or repair) each geodata file independently: Xray cannot parse
+        // any config referencing geosite:/geoip: rules until the matching
+        // .dat exists, complete, in this folder. Files arrive inside the APK
+        // (bundled into the libv2ray AAR assets upstream), so this works fully
+        // offline on first launch. A file that is missing from the APK cannot
+        // be fabricated here; that is logged instead of failing silently.
+        for (name in geo) {
+            if (name !in available) {
+                if (name != AppConfig.GEOIP_ONLY_CN_PRIVATE_DAT) {
+                    LogUtil.e(ANG_PACKAGE, "geodata asset missing from APK assets: $name")
+                }
+                continue
+            }
+            val target = File(extFolder, name)
+            val expectedSize = try {
+                assets.openFd(name).use { it.length }
+            } catch (e: Exception) {
+                -1L // Compressed asset: size unknown, completeness checked by copy.
+            }
+            if (GeoAssetFiles.isComplete(target, expectedSize)) continue
+            val installed = try {
+                GeoAssetFiles.installIfNeeded(target, expectedSize) { assets.open(name) }
+            } catch (e: Exception) {
+                LogUtil.e(ANG_PACKAGE, "asset copy failed for $name", e)
+                false
+            }
+            if (installed) {
+                LogUtil.i(AppConfig.TAG, "Copied from apk assets folder to ${target.absolutePath}")
+            } else {
+                LogUtil.e(ANG_PACKAGE, "asset copy failed for $name: incomplete or failed copy")
+            }
         }
     }
 
