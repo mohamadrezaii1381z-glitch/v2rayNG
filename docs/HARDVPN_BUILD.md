@@ -57,6 +57,14 @@ Redmi Note 12 (Snapdragon 685 / Dimensity 1080 variants) is **arm64-v8a**.
    `export NDK_HOME="C:\Users\<you>\AppData\Local\Android\Sdk\ndk\30.0.16248370"`
 5. `bash compile-hevtun.sh` — detects `build/ndk-build` (or the `.cmd`
    wrappers), builds all ABIs and stages the outputs automatically.
+   Developer Mode is **not** required: on Windows the script stages a
+   cleaned copy of the HEV sources into the temp build tree — submodule
+   `.git` gitfiles (whose relative `gitdir:` pointers are invalid outside
+   the checkout) are excluded, and headers that Git checked out as plain
+   text symlink placeholders (e.g. `hev-object-atomic.h` containing only
+   `../src/lib/object/hev-object-atomic.h`) are replaced with the real
+   target file contents taken from the Git index (mode `120000`). The
+   upstream checkout is never modified.
 6. Build the app from `V2rayNG/` (e.g. `./gradlew assembleFdroidDebug`).
 
 Linux/macOS: same steps; `ndk-build` is detected in `build/` as before and

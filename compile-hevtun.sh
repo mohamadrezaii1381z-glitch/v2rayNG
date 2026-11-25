@@ -128,11 +128,64 @@ ABIS="armeabi-v7a arm64-v8a x86 x86_64"
 mkdir -p "$TMPDIR/jni"
 pushd "$TMPDIR"
 
-# Link the HEV sources into the temp build tree. On Windows Git Bash without
-# Developer Mode, `ln -s` cannot always create a real symlink, so fall back to
-# a plain copy of the submodule (build output is identical either way).
-if ! ln -s "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel 2>/dev/null; then
-  cp -r "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel
+# Stage the HEV sources into the temp build tree.
+#
+# Linux/macOS: a symlink to the real submodule (upstream behavior, unchanged).
+#
+# Windows: a plain copy breaks the build twice, so a cleaned staged copy is
+# used instead:
+#  1. The submodule `.git` gitfile (and every nested submodule `.git`) contains
+#     a relative `gitdir:` pointer that is invalid inside the temp tree, which
+#     makes git fail with "fatal: gitfile does not point to a valid repository"
+#     during the build. All `.git` entries are therefore excluded from the copy.
+#  2. Without Developer Mode/admin rights, Git for Windows checks out Git
+#     symlinks (mode 120000) as plain text files containing the target path,
+#     e.g. include/hev-object-atomic.h literally containing
+#     "../src/lib/object/hev-object-atomic.h", which the compiler then rejects.
+#     Every path recorded as a symlink in the Git index (main repo and nested
+#     submodules) is materialized in the staged copy with the real target
+#     file's contents. The upstream checkout itself is never modified.
+stage_hev_sources() {
+  local dest="jni/hev-socks5-tunnel"
+  mkdir -p "$dest"
+  cp -r "$__dir/hev-socks5-tunnel/." "$dest/"
+  # 1) Drop every .git pointer file/dir from the staged copy.
+  find "$dest" -name .git -exec rm -rf {} + 2>/dev/null || true
+  # 2) Materialize Git symlinks with their targets' real contents.
+  local repo_root rel link_path target resolved tmp_file
+  while IFS= read -r repo_root; do
+    rel="${repo_root#"$__dir/hev-socks5-tunnel"}"
+    rel="${rel#/}"
+    while IFS= read -r link_path; do
+      local staged_link="$dest${rel:+/$rel}/$link_path"
+      [[ -e "$staged_link" || -L "$staged_link" ]] || continue
+      # Read the target from the pristine checkout (real symlink or text file).
+      if [[ -L "$repo_root/$link_path" ]]; then
+        target="$(readlink "$repo_root/$link_path")"
+      else
+        target="$(tr -d '\r\n' < "$repo_root/$link_path")"
+      fi
+      # Resolve against the pristine checkout so chained links are followed
+      # to the genuine file, then copy that content into the staged tree.
+      resolved="$(dirname "$repo_root/$link_path")/$target"
+      if [[ -f "$resolved" ]]; then
+        tmp_file="$staged_link.materialized"
+        cp -fL "$resolved" "$tmp_file"
+        rm -f "$staged_link"
+        mv "$tmp_file" "$staged_link"
+        echo "Materialized symlink: ${rel:+$rel/}$link_path -> $target"
+      else
+        echo "WARNING: symlink target not found for ${rel:+$rel/}$link_path -> $target" >&2
+      fi
+    done < <(git -C "$repo_root" ls-files -s 2>/dev/null | awk '$1 == "120000" { $1=""; $2=""; $3=""; sub(/^ +/, ""); print }')
+  done < <(find "$__dir/hev-socks5-tunnel" -name .git -exec dirname {} \; | sort -u)
+}
+
+if [[ $IS_WINDOWS -eq 1 ]]; then
+  stage_hev_sources
+elif ! ln -s "$__dir/hev-socks5-tunnel" jni/hev-socks5-tunnel 2>/dev/null; then
+  # Non-Windows fallback (e.g. symlink creation refused): same cleaned copy.
+  stage_hev_sources
 fi
 
 # 1) JNI shared library (libhev-socks5-tunnel.so) — loaded in-process by
