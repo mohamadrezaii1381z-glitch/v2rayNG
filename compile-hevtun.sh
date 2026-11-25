@@ -24,58 +24,100 @@ if [[ ! -d "$NDK_HOME" ]]; then
   exit 1
 fi
 
+# --- Detect the host platform ---
+# Windows hosts (Git Bash / MSYS2 / Cygwin) MUST use the official Windows batch
+# entry point ndk-build.cmd. The Unix build/ndk-build script rejects the
+# Windows NDK's bundled make.exe with:
+#   "ERROR: You are using a non-Cygwin compatible Make program."
+# so the Unix script is only used on Linux/macOS.
+IS_WINDOWS=0
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+esac
+
 # --- Detect the correct ndk-build executable for this platform ---
-# Linux/macOS NDKs and modern Windows NDKs ship a Unix shell script at
-#   $NDK_HOME/build/ndk-build
-# Older layouts place it at $NDK_HOME/ndk-build. Windows additionally ships
-# .cmd batch wrappers (ndk-build.cmd), which cannot be executed directly by
-# Bash and are only a last-resort fallback through cmd.exe.
 NDK_BUILD=""
 NDK_BUILD_CMD=""
-if [[ -f "$NDK_HOME/build/ndk-build" ]]; then
-  NDK_BUILD="$NDK_HOME/build/ndk-build"
-elif [[ -f "$NDK_HOME/ndk-build" ]]; then
-  NDK_BUILD="$NDK_HOME/ndk-build"
-elif [[ -f "$NDK_HOME/build/ndk-build.cmd" ]]; then
-  NDK_BUILD_CMD="$NDK_HOME/build/ndk-build.cmd"
-elif [[ -f "$NDK_HOME/ndk-build.cmd" ]]; then
-  NDK_BUILD_CMD="$NDK_HOME/ndk-build.cmd"
-else
+if [[ $IS_WINDOWS -eq 1 ]]; then
+  if [[ -f "$NDK_HOME/build/ndk-build.cmd" ]]; then
+    NDK_BUILD_CMD="$NDK_HOME/build/ndk-build.cmd"
+  elif [[ -f "$NDK_HOME/ndk-build.cmd" ]]; then
+    NDK_BUILD_CMD="$NDK_HOME/ndk-build.cmd"
+  fi
+fi
+if [[ -z "$NDK_BUILD_CMD" ]]; then
+  if [[ -f "$NDK_HOME/build/ndk-build" ]]; then
+    NDK_BUILD="$NDK_HOME/build/ndk-build"
+  elif [[ -f "$NDK_HOME/ndk-build" ]]; then
+    NDK_BUILD="$NDK_HOME/ndk-build"
+  elif [[ -f "$NDK_HOME/build/ndk-build.cmd" ]]; then
+    NDK_BUILD_CMD="$NDK_HOME/build/ndk-build.cmd"
+  elif [[ -f "$NDK_HOME/ndk-build.cmd" ]]; then
+    NDK_BUILD_CMD="$NDK_HOME/ndk-build.cmd"
+  fi
+fi
+if [[ -z "$NDK_BUILD" && -z "$NDK_BUILD_CMD" ]]; then
   echo "Android NDK: ndk-build not found under $NDK_HOME (looked in build/ and NDK root)."
   exit 1
 fi
 
-# Invoke ndk-build portably:
-# - Prefer the Unix shell script, executed through bash so a missing
-#   executable bit (common after unzipping the NDK on Windows) is harmless.
-# - Fall back to the .cmd wrapper via cmd.exe with a Windows-style path.
+# Invoke ndk-build portably.
+#
+# Unix path: run the shell script through bash so a missing executable bit is
+# harmless.
+#
+# Windows path: arguments such as NDK_LIBS_OUT=/tmp/... are MSYS paths that
+# cmd.exe and the Windows make cannot resolve, and values with spaces
+# (APP_CFLAGS, APP_ABI) would be mangled by Bash -> cmd.exe argument passing.
+# The reliable method is to generate a small batch file with Windows-style
+# paths (cygpath -w) and fully quoted arguments, then execute that batch file
+# with cmd.exe. ndk-build.cmd sets up its own compatible make internally, so
+# no external make is needed (or permitted) on this path.
 run_ndk_build() {
   if [[ -n "$NDK_BUILD" ]]; then
     bash "$NDK_BUILD" "$@"
-  else
-    MSYS2_ARG_CONV_EXCL="*" cmd //c "$(cygpath -w "$NDK_BUILD_CMD")" "$@"
+    return
   fi
+  local batch="$TMPDIR/ndk-run.cmd"
+  local win_ndk_build
+  win_ndk_build="$(cygpath -w "$NDK_BUILD_CMD")"
+  {
+    # Batch files are written with CRLF line endings for cmd.exe.
+    printf '@echo off\r\n'
+    printf 'call "%s"' "$win_ndk_build"
+    local arg value
+    for arg in "$@"; do
+      value="${arg#*=}"
+      # Convert any embedded MSYS temp paths to Windows paths.
+      if [[ "$value" == "$TMPDIR"* ]]; then
+        value="$(cygpath -w "$value")"
+        arg="${arg%%=*}=$value"
+      fi
+      # Quote every argument; values themselves never contain double quotes.
+      printf ' "%s"' "$arg"
+    done
+    printf '\r\n'
+    printf 'exit /b %%ERRORLEVEL%%\r\n'
+  } > "$batch"
+  MSYS2_ARG_CONV_EXCL="*" cmd //c "$(cygpath -w "$batch")"
 }
 
-# --- Ensure GNU make is available ---
-# ndk-build is a make-based build system. Git Bash/MSYS2 does not ship make by
-# default, which previously made this script fail on Windows with a bare
-# "make: command not found". The Windows NDK bundles its own make under
-# prebuilt/<host>/bin, so prefer that; otherwise fail early with instructions
-# instead of a confusing mid-build error.
-if ! command -v make >/dev/null 2>&1; then
+# --- Ensure GNU make is available (Unix ndk-build path only) ---
+# On the Windows .cmd path, ndk-build.cmd wires up its own compatible make;
+# adding the NDK's Windows make.exe to PATH for the Unix script is exactly
+# what caused the non-Cygwin Make error, so it is never done there.
+if [[ -n "$NDK_BUILD" ]] && ! command -v make >/dev/null 2>&1; then
   for _make_dir in "$NDK_HOME"/prebuilt/*/bin; do
-    if [[ -f "$_make_dir/make.exe" || -f "$_make_dir/make" ]]; then
+    if [[ -f "$_make_dir/make" ]]; then
       PATH="$_make_dir:$PATH"
       break
     fi
   done
 fi
-if ! command -v make >/dev/null 2>&1; then
+if [[ -n "$NDK_BUILD" ]] && ! command -v make >/dev/null 2>&1; then
   echo "GNU make not found. ndk-build requires it."
-  echo "  MSYS2/Git Bash (UCRT64):  pacman -S make"
-  echo "  Linux:                    install GNU make with your package manager"
-  echo "  macOS:                    xcode-select --install"
+  echo "  Linux:  install GNU make with your package manager"
+  echo "  macOS:  xcode-select --install"
   exit 1
 fi
 TMPDIR=$(mktemp -d)
