@@ -67,39 +67,36 @@ fi
 # harmless.
 #
 # Windows path: arguments such as NDK_LIBS_OUT=/tmp/... are MSYS paths that
-# cmd.exe and the Windows make cannot resolve, and values with spaces
-# (APP_CFLAGS, APP_ABI) would be mangled by Bash -> cmd.exe argument passing.
-# The reliable method is to generate a small batch file with Windows-style
-# paths (cygpath -w) and fully quoted arguments, then execute that batch file
-# with cmd.exe. ndk-build.cmd sets up its own compatible make internally, so
-# no external make is needed (or permitted) on this path.
+# the Windows tools cannot resolve, and values with spaces (APP_CFLAGS,
+# APP_ABI) would be mangled by Bash argument passing. Direct `cmd //c` from
+# Git Bash is also unreliable in this environment (it can open an interactive
+# CMD prompt instead of executing). The reliable launcher is PowerShell:
+# it starts the official ndk-build.cmd non-interactively through the Windows
+# command interpreter, with a Windows-style path and single-quoted arguments
+# (argument values never contain single quotes). ndk-build.cmd sets up its
+# own compatible make internally, so no external make is needed on this path.
+# MSYS2_ARG_CONV_EXCL disables MSYS path conversion for the whole invocation,
+# and the batch file's exit code is propagated back to Bash unchanged.
 run_ndk_build() {
   if [[ -n "$NDK_BUILD" ]]; then
     bash "$NDK_BUILD" "$@"
     return
   fi
-  local batch="$TMPDIR/ndk-run.cmd"
   local win_ndk_build
   win_ndk_build="$(cygpath -w "$NDK_BUILD_CMD")"
-  {
-    # Batch files are written with CRLF line endings for cmd.exe.
-    printf '@echo off\r\n'
-    printf 'call "%s"' "$win_ndk_build"
-    local arg value
-    for arg in "$@"; do
-      value="${arg#*=}"
-      # Convert any embedded MSYS temp paths to Windows paths.
-      if [[ "$value" == "$TMPDIR"* ]]; then
-        value="$(cygpath -w "$value")"
-        arg="${arg%%=*}=$value"
-      fi
-      # Quote every argument; values themselves never contain double quotes.
-      printf ' "%s"' "$arg"
-    done
-    printf '\r\n'
-    printf 'exit /b %%ERRORLEVEL%%\r\n'
-  } > "$batch"
-  MSYS2_ARG_CONV_EXCL="*" cmd //c "$(cygpath -w "$batch")"
+  local ps_command="& '${win_ndk_build}'"
+  local arg value
+  for arg in "$@"; do
+    value="${arg#*=}"
+    # Convert any embedded MSYS temp paths to Windows paths.
+    if [[ "$value" == "$TMPDIR"* ]]; then
+      value="$(cygpath -w "$value")"
+      arg="${arg%%=*}=$value"
+    fi
+    ps_command+=" '${arg}'"
+  done
+  ps_command+="; exit \$LASTEXITCODE"
+  MSYS2_ARG_CONV_EXCL="*" powershell.exe -NoProfile -Command "$ps_command"
 }
 
 # --- Ensure GNU make is available (Unix ndk-build path only) ---
