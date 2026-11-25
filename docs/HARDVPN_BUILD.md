@@ -44,8 +44,11 @@ Redmi Note 12 (Snapdragon 685 / Dimensity 1080 variants) is **arm64-v8a**.
 
 1. JDK 21 (Temurin) and the Android SDK with NDK `30.0.16248370`.
 2. `git submodule update --init` (HEV + AndroidLibXrayLite sources).
-3. On Windows the script uses the official `ndk-build.cmd`, which sets up its
-   own compatible make internally — do **not** run the Unix `build/ndk-build`
+3. On Windows the script launches the official `ndk-build.cmd` through
+   PowerShell (`powershell.exe -NoProfile -Command "& '...ndk-build.cmd' ...; exit $LASTEXITCODE"`),
+   which runs it non-interactively through the Windows command interpreter
+   and propagates the native exit code. `ndk-build.cmd` sets up its own
+   compatible make internally — do **not** run the Unix `build/ndk-build`
    script with the NDK's Windows `make.exe` (it fails with "You are using a
    non-Cygwin compatible Make program"), and no external make or Cygwin/MSYS2
    installation is required. (GNU make is only needed on the Linux/macOS
