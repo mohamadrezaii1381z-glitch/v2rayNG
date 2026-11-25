@@ -44,9 +44,12 @@ Redmi Note 12 (Snapdragon 685 / Dimensity 1080 variants) is **arm64-v8a**.
 
 1. JDK 21 (Temurin) and the Android SDK with NDK `30.0.16248370`.
 2. `git submodule update --init` (HEV + AndroidLibXrayLite sources).
-3. GNU make — Git Bash does not ship it. `compile-hevtun.sh` first tries the
-   make bundled in the NDK (`prebuilt/<host>/bin/make.exe`); if none is found
-   it exits early. Permanent fix in MSYS2 UCRT64: `pacman -S make`.
+3. On Windows the script uses the official `ndk-build.cmd`, which sets up its
+   own compatible make internally — do **not** run the Unix `build/ndk-build`
+   script with the NDK's Windows `make.exe` (it fails with "You are using a
+   non-Cygwin compatible Make program"), and no external make or Cygwin/MSYS2
+   installation is required. (GNU make is only needed on the Linux/macOS
+   Unix-script path.)
 4. Export the NDK path (Windows or POSIX form both work):
    `export NDK_HOME="C:\Users\<you>\AppData\Local\Android\Sdk\ndk\30.0.16248370"`
 5. `bash compile-hevtun.sh` — detects `build/ndk-build` (or the `.cmd`
