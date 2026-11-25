@@ -56,6 +56,28 @@ run_ndk_build() {
     MSYS2_ARG_CONV_EXCL="*" cmd //c "$(cygpath -w "$NDK_BUILD_CMD")" "$@"
   fi
 }
+
+# --- Ensure GNU make is available ---
+# ndk-build is a make-based build system. Git Bash/MSYS2 does not ship make by
+# default, which previously made this script fail on Windows with a bare
+# "make: command not found". The Windows NDK bundles its own make under
+# prebuilt/<host>/bin, so prefer that; otherwise fail early with instructions
+# instead of a confusing mid-build error.
+if ! command -v make >/dev/null 2>&1; then
+  for _make_dir in "$NDK_HOME"/prebuilt/*/bin; do
+    if [[ -f "$_make_dir/make.exe" || -f "$_make_dir/make" ]]; then
+      PATH="$_make_dir:$PATH"
+      break
+    fi
+  done
+fi
+if ! command -v make >/dev/null 2>&1; then
+  echo "GNU make not found. ndk-build requires it."
+  echo "  MSYS2/Git Bash (UCRT64):  pacman -S make"
+  echo "  Linux:                    install GNU make with your package manager"
+  echo "  macOS:                    xcode-select --install"
+  exit 1
+fi
 TMPDIR=$(mktemp -d)
 clear_tmp () {
   rm -rf $TMPDIR
